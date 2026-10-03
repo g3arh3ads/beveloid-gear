@@ -1,29 +1,83 @@
--- ---- Colour palette (brush index, R, G, B) ----
-set_brush_color(0, 0.0, 0.0, 0.0) -- black
-set_brush_color(1, 1.0, 1.0, 1.0) -- white
-set_brush_color(2, 0.5, 0.0, 0.0) -- red
-set_brush_color(3, 0.0, 0.1, 0.4) -- blue
-set_brush_color(4, 0.6, 0.4, 0.2) -- brown (wooden plate)
-set_brush_color(5, 1.0, 0.8, 0.0) -- yellow (backlash probe, stands out against everything else)
+-- ============================================================
+-- Conical Involute Gears (Beveloid gear) for backlash reduction by axial gear adjustment
+-- ============================================================
 
--- Every emit() uses a name from this table instead of a bare number
+-- The following script is a demonstration of straight conical involute gear design and meshing,
+-- based on the analytical rack-generation method described by Brauer (2002).
+
+-- Citation:
+-- Brauer, Jesper. (2002). Analytical geometry of straight conical involute gears. Mechanism and Machine Theory. 37, 127-141.
+-- doi: 10.1016/S0094-114X(01)00062-3.
+
+-- ============================================================
+-- SECTION 0: OVERVIEW
+-- ============================================================
+
+-- This script builds a pair of meshing conical involute gears with user-defined geometry and profile shifts.
+-- The UI sliders allow to explore how different profile shift distributions across the face width affect the gear geometry and meshing behaviour.
+
+-- Structure
+--   1. Colours and fixed constants
+--   2. UI parameters
+--   3. Helper functions
+--   4. Beveloid gear builder (Brauer rack-generation method)
+--   5. Hardware: screws, mount, threads, shafts, nuts, snap pin, handle
+--   6. Centre distance and backlash prediction
+--   7. Assembly, output, console report and STL export
+
+-- Instructions
+
+--   Default view: the full assembly with only three controls - "Advanced mode",
+--     "Check for intersection (backlash probe)", "Resolution" - plus "Axial offset (mm)".
+
+--   "Advanced mode" adds:
+--       - "STL export mode": shows one part at a time, picked with the "STL export shape"
+--         list at the bottom of the panel, ready for File > Export (see the end of SECTION 7)
+--       - "Toggle individual bodies": show/hide checkboxes for each part (hidden in STL mode)
+--       - Gear parameters: module, pressure angle, tooth counts, face width, profile shifts,
+--         fillet, shaft diameter, driving gear rotation, centre distance
+--       - "Driven gear angular offset (deg)"
+
+--   "Check for intersection (backlash probe)": only the overlap of the two gears is drawn:
+--       - nothing          -> flanks not touching   (positive backlash)
+--       - thin sliver      -> flanks just touching  (zero backlash)
+--       - visible volume   -> flanks penetrating    (negative backlash / interference)
+--     It also shows "Driven gear angular offset (deg)", which rotates only the driven gear
+--     so the play can be probed.
+
+--   The IceSL console prints a short report: tooth counts, cone and pressure angles,
+--     centre distance, engaged width and the analytically predicted backlash for the
+--     current axial offset, followed by any notes and warnings.
+
+-- ============================================================
+-- SECTION 1: COLOURS AND FIXED CONSTANTS
+-- ============================================================
+
+-- ---- Colour palette (brush index, R, G, B) ----
+set_brush_color(1, 0.0, 0.0, 0.0) -- black
+set_brush_color(2, 1.0, 1.0, 1.0) -- white
+set_brush_color(3, 0.5, 0.0, 0.0) -- red
+set_brush_color(4, 0.0, 0.1, 0.4) -- blue
+set_brush_color(5, 0.6, 0.4, 0.2) -- brown (wooden plate)
+set_brush_color(6, 1.0, 0.8, 0.0) -- yellow (backlash probe, stands out against everything else)
+
 local brush = {
-  driving_gear  = 2,
-  driven_gear   = 1,
-  shaft         = 3,
-  shim          = 0,
-  driving_cap   = 1, -- white cap on the red gear
-  driven_cap    = 2, -- red cap on the white gear
-  handle        = 0,
-  extra_handle  = 2,
-  wooden_plate  = 4,
-  intersection  = 5,
+  driving_gear  = 3,
+  driven_gear   = 2,
+  shaft         = 4,
+  shim          = 1,
+  driving_cap   = 2, -- white cap on the red gear
+  driven_cap    = 3, -- red cap on the white gear
+  handle        = 1,
+  wooden_plate  = 5,
+  intersection  = 6,
 }
 
 -- ---- Gear constants ----
 local x_min                      = -0.3 -- minimum profile shift coefficient (undercut limit)
 local x_max                      = 1.0  -- maximum profile shift coefficient
 local h_a_coef                   = 1.25 -- addendum of the generating rack = dedendum of the gear (ISO 53: 1.25*m)
+local z_start     = 22    -- requested tooth count (raised automatically if it would undercut)
 
 -- ---- Hardware constants [mm] (match the printed prototype) ----
 local spring_compressed_h        = 8    -- compressed spring height under the driving gear
@@ -65,52 +119,54 @@ local wood_height                = 9.0
 -- ============================================================
 -- All widgets are declared here so they appear in a sensible order in the IceSL panel.
 
+local advanced     = ui_bool("Advanced mode", false)
+local show_intersection = ui_bool("Check for intersection (backlash probe)", false)
 local res          = ui_number("Resolution", 10, 5, 50)     -- Controls mesh resolution for all curve samplings
-local show_threads = ui_bool("Show threads (slow)", false)  -- helical threads vs plain cylinders
-local advanced     = ui_bool("Advanced gear parameters", false)
+
 
 -- Returns the default in the simple view, or a slider in the advanced view
-local function param(kind, label, default, min, max)
+local function adv_param(kind, label, default, min, max)
   if not advanced then return default end
   if kind == "int" then return ui_number(label, default, min, max) end
+  if kind == "bool" then return ui_bool(label, default) end
   return ui_scalar(label, default, min, max)
 end
 
 -- ---- Gear geometry ----
-local m           = param("real", "Module", 4.0, 1.0, 10.0)                    -- Gear module [mm]
-local alpha_n_deg = param("int", "Normal Pressure Angle (deg)", 20, 16, 24)  -- Normal pressure angle in degrees
+local toggles = adv_param("bool", "Toggle individual bodies", false)
+
+local m           = adv_param("real", "Module", 4.0, 1.0, 10.0)                    -- Gear module [mm]
+local alpha_n_deg = adv_param("int", "Normal Pressure Angle (deg)", 20, 16, 24)  -- Normal pressure angle in degrees
 
 local alpha_n_rad = math.rad(alpha_n_deg)
 
 -- ---- Minimum tooth count to prevent undercut: z_min = 2 (1 - x_min) / sin^2(alpha_n) ----
 local sin_alpha_n = math.sin(alpha_n_rad)
 local zmin        = math.ceil(2 * (1 - x_min) / (sin_alpha_n * sin_alpha_n))
+local z_default   = math.max(z_start, zmin)
 
-local z_driving   = param("int", "Number of Teeth-Driving Gear", math.max(22, zmin), zmin, 40)
-local z_driven    = param("int", "Number of Teeth-Driven Gear", math.max(22, zmin), zmin, 40)
-local b           = param("real", "Face Width (mm)", 15.0, 5.0, 30.0)         -- Axial face width [mm]
+local z_driving   = adv_param("int", "Number of Teeth-Driving Gear", z_default, zmin, 40)
+local z_driven    = adv_param("int", "Number of Teeth-Driven Gear", z_default, zmin, 40)
+local b           = adv_param("real", "Face Width (mm)", 15.0, 5.0, 30.0)         -- Axial face width [mm]
 
--- ---- Profile shifts of Driving Gear ----
-local x_coef_bottom_driving = param("real", "Profile Shift Coefficient Bottom-Driving Gear", x_max, x_min, x_max)
-local x_coef_top_driving    = param("real", "Profile Shift Coefficient Top-Driving Gear", x_min, x_min, x_max)
+-- ---- Profile shifts of Driving and Driven Gears ----
+local x_coef_bottom_driving = adv_param("real", "Profile Shift Coefficient Bottom-Driving Gear", x_max, x_min, x_max)
+local x_coef_top_driving    = adv_param("real", "Profile Shift Coefficient Top-Driving Gear", x_min, x_min, x_max)
 
--- ---- Profile shifts of Driven Gear (can be different from Driving Gear) ----
-local x_coef_bottom_driven  = param("real", "Profile Shift Coefficient Bottom-Driven Gear", x_max, x_min, x_max)
-local x_coef_top_driven     = param("real", "Profile Shift Coefficient Top-Driven Gear", x_min, x_min, x_max)
+local x_coef_bottom_driven  = adv_param("real", "Profile Shift Coefficient Bottom-Driven Gear", x_max, x_min, x_max)
+local x_coef_top_driven     = adv_param("real", "Profile Shift Coefficient Top-Driven Gear", x_min, x_min, x_max)
 
 -- ---- Tooth geometry coefficients ----
-local rho_coef      = param("real", "Fillet Coefficient", 0.38, 0.05, 0.8)  -- coefficient of tip radius of generating rack
+local rho_coef      = adv_param("real", "Fillet Coefficient", 0.38, 0.05, 0.8)  -- coefficient of tip radius of generating rack
 
 -- ---- Shaft and assembly ----
-local shaft_dia     = param("real", "Shaft diameter (mm)", 17.0, 10.0, 25.0) -- Shaft diameter [mm]
-local gear_rotation = param("real", "Driving Gear Rotation (Anti-Clockwise direction) (deg)", 0, 0, 90.0)
-local clearance     = param("real", "Clearance (mm)", 0.0, 0.0, 5.0)          -- extra centre distance [mm]
+local shaft_dia     = adv_param("real", "Shaft diameter (mm)", 17.0, 10.0, 25.0) -- Shaft diameter [mm]
+local gear_rotation = adv_param("real", "Driving Gear Rotation (Anti-Clockwise direction) (deg)", 0, 0, 90.0)
+local clearance     = adv_param("real", "Clearance (mm)", 0.0, 0.0, 5.0)          -- centre distance [mm]
 
 -- ---- Main control: axial adjustment of the driven gear ----
 local axial_offset  = ui_scalar("Axial offset(mm)", 0, 0, b - mesh_min_overlap)
 
--- ---- Backlash demonstration ----
-local show_intersection = ui_bool("Show Intersection Body", false) -- Highlight overlapping volume (backlash probe)
 -- Rotates ONLY the driven gear so backlash can be probed
 local driven_gear_angular_offset = 0
 if advanced or show_intersection then
@@ -118,13 +174,20 @@ if advanced or show_intersection then
 end
 
 -- ---- Visualization toggles ----
-local show_driving_gear = ui_bool("Show Driving Gear", true)
-local show_driven_gear  = ui_bool("Show Driven Gear", true)
-local show_shafts       = ui_bool("Show Shafts", true)
-local show_shim         = ui_bool("Show Shim", true)
-local show_cap          = ui_bool("Show Caps", true)
-local show_handle       = ui_bool("Show Handle", true)
-local show_wooden_plate = ui_bool("Show Wooden Plate", true)
+local function toggle_bodies(label, value)
+  if toggles then 
+    return ui_bool(label, value) 
+  else  
+    return true
+  end
+end
+local show_driving_gear = toggle_bodies("Show Driving Gear", true)
+local show_driven_gear  = toggle_bodies("Show Driven Gear", true)
+local show_shafts       = toggle_bodies("Show Shafts", true)
+local show_shim         = toggle_bodies("Show Shim", true)
+local show_cap          = toggle_bodies("Show Caps", true)
+local show_handle       = toggle_bodies("Show Handle", true)
+local show_wooden_plate = toggle_bodies("Show Wooden Plate", true)
 
 -- ============================================================
 -- SECTION 3: HELPER FUNCTIONS
@@ -133,7 +196,7 @@ local show_wooden_plate = ui_bool("Show Wooden Plate", true)
 -- Messages collected during the build and printed at the end
 local messages = {}
 local function note(fmt, ...)
-  messages[#messages + 1] = string.format(fmt, ...)
+  messages[#messages + 1] = string.format(fmt, ...) .. "\n"
 end
 
 -- Floating-point modulo  (always non-negative for positive b)
@@ -535,9 +598,6 @@ end
 
 -- ra: circle radius, rs: radial offset (thread depth ~ 2*rs), len: thread length
 local function make_thread(ra, rs, len)
-  if not show_threads then
-    return cylinder(ra + rs, len) -- fast stand-in with the same outer diameter
-  end
   local all_tbl = {}
   local n = math.max(2, math.floor(len * thread_steps_per_mm + 0.5))
   for h = 1, n do
@@ -914,17 +974,17 @@ else
 end
 
 -- ---- Console report ----
-print("==== Beveloid gear pair ====")
-print(string.format("Teeth %d / %d, module %.2f mm, normal pressure angle %.1f deg",
+print("==== Beveloid gear pair ====\n")
+print(string.format("Teeth %d / %d, module %.2f mm, normal pressure angle %.1f deg\n",
   z_driving, z_driven, m, alpha_n_deg))
-print(string.format("Cone angle %.2f deg, transverse pressure angle %.2f deg",
+print(string.format("Cone angle %.2f deg, transverse pressure angle %.2f deg\n",
   math.deg(delta_driving), math.deg(alpha_t)))
-print(string.format("Centre distance %.3f mm (design sum of mid-face shifts %.3f)",
+print(string.format("Centre distance %.3f mm (design sum of mid-face shifts %.3f)\n",
   operating_center_dist, sum_x))
-print(string.format("Axial offset %.2f mm -> engaged width %.2f mm, local shift sum %.3f",
+print(string.format("Axial offset %.2f mm -> engaged width %.2f mm, local shift sum %.3f\n",
   axial_offset, overlap_hi - overlap_lo, x_driving_mesh + x_driven_mesh))
 if backlash then
-  print(string.format("Predicted backlash %.3f mm circumferential (%.3f mm normal), driven-gear free play %.3f deg",
+  print(string.format("Predicted backlash %.3f mm circumferential (%.3f mm normal), driven-gear free play %.3f deg\n",
     backlash, backlash * math.cos(alpha_w), math.deg(backlash / r_w_driven)))
 end
 for _, msg in ipairs(messages) do
