@@ -117,24 +117,21 @@ local wood_height                = 9.0
 -- ============================================================
 -- SECTION 2: UI PARAMETERS
 -- ============================================================
--- All widgets are declared here so they appear in a sensible order in the IceSL panel.
 
 local advanced     = ui_bool("Advanced mode", false)
 local show_intersection = ui_bool("Check for intersection (backlash probe)", false)
-local res          = ui_number("Resolution", 10, 5, 50)     -- Controls mesh resolution for all curve samplings
+local res         = ui_number("Resolution (decrease for performance)", 10, 5, 50)       -- sampling for every curve
 
 
 -- Returns the default in the simple view, or a slider in the advanced view
 local function adv_param(kind, label, default, min, max)
   if not advanced then return default end
-  if kind == "int" then return ui_number(label, default, min, max) end
-  if kind == "bool" then return ui_bool(label, default) end
-  return ui_scalar(label, default, min, max)
+  if kind == "int" then return ui_number(label, default, min, max) 
+  elseif kind == "real" then return ui_scalar(label, default, min, max)
+  elseif kind == "bool" then return ui_bool(label, default) end
 end
 
 -- ---- Gear geometry ----
-local toggles = adv_param("bool", "Toggle individual bodies", false)
-
 local m           = adv_param("real", "Module", 4.0, 1.0, 10.0)                    -- Gear module [mm]
 local alpha_n_deg = adv_param("int", "Normal Pressure Angle (deg)", 20, 16, 24)  -- Normal pressure angle in degrees
 
@@ -161,7 +158,7 @@ local rho_coef      = adv_param("real", "Fillet Coefficient", 0.38, 0.05, 0.8)  
 
 -- ---- Shaft and assembly ----
 local shaft_dia     = adv_param("real", "Shaft diameter (mm)", 17.0, 10.0, 25.0) -- Shaft diameter [mm]
-local gear_rotation = adv_param("real", "Driving Gear Rotation (Anti-Clockwise direction) (deg)", 0, 0, 90.0)
+local gear_rotation = ui_scalar("Driving Gear Rotation (Anti-Clockwise direction) (deg)", 0, 0, 90.0)
 local clearance     = adv_param("real", "Clearance (mm)", 0.0, 0.0, 5.0)          -- centre distance [mm]
 
 -- ---- Main control: axial adjustment of the driven gear ----
@@ -169,25 +166,38 @@ local axial_offset  = ui_scalar("Axial offset(mm)", 0, 0, b - mesh_min_overlap)
 
 -- Rotates ONLY the driven gear so backlash can be probed
 local driven_gear_angular_offset = 0
-if advanced or show_intersection then
-  driven_gear_angular_offset = ui_scalar("Driven Gear angular offset (deg)", 0, -2.0, 2.0)
-end
+driven_gear_angular_offset = ui_scalar("Driven Gear angular offset (deg)", 0, -2.0, 2.0)
 
 -- ---- Visualization toggles ----
-local function toggle_bodies(label, value)
-  if toggles then 
-    return ui_bool(label, value) 
-  else  
-    return true
+local show_driving_gear
+local show_driven_gear
+local show_shafts
+local show_shim
+local show_cap
+local show_handle
+local show_wooden_plate
+
+if not advanced then
+  show_driving_gear = true
+  show_driven_gear  = true
+  show_shafts       = true
+  show_shim         = true
+  show_cap          = true
+  show_handle       = true
+  show_wooden_plate = true
+else  
+  mode = ui_radio("\nMode selection", { { 0, "Toggle individual bodies" }, { 1, "STL Export" } })
+  if mode==0 then
+    show_driving_gear = ui_bool("Show Driving Gear", true)
+    show_driven_gear  = ui_bool("Show Driven Gear", true)
+    show_shafts       = ui_bool("Show Shafts", true)
+    show_shim         = ui_bool("Show Shim", true)
+    show_cap          = ui_bool("Show Caps", true)
+    show_handle       = ui_bool("Show Handle", true)
+    show_wooden_plate = ui_bool("Show Wooden Plate", true)
   end
+  -- STL option is handled at the end, since it needs parts to be drawn first
 end
-local show_driving_gear = toggle_bodies("Show Driving Gear", true)
-local show_driven_gear  = toggle_bodies("Show Driven Gear", true)
-local show_shafts       = toggle_bodies("Show Shafts", true)
-local show_shim         = toggle_bodies("Show Shim", true)
-local show_cap          = toggle_bodies("Show Caps", true)
-local show_handle       = toggle_bodies("Show Handle", true)
-local show_wooden_plate = toggle_bodies("Show Wooden Plate", true)
 
 -- ============================================================
 -- SECTION 3: HELPER FUNCTIONS
@@ -955,10 +965,6 @@ if show_intersection then
 else
   if show_driving_gear then emit(meshed_driving_gear, brush.driving_gear) end
   if show_driven_gear then emit(meshed_driven_gear, brush.driven_gear) end
-  if show_shafts then
-    emit(driving_shaft, brush.shaft)
-    emit(driven_shaft, brush.shaft)
-  end
   if show_shim then
     emit(translate(0, 0, -axial_offset) * shim_slotted, brush.shim)
     emit(translate(0, 0, -axial_offset - b - shim_thickness) * shim_slotted, brush.shim)
@@ -970,8 +976,13 @@ else
   if show_handle then
     emit(meshed_handle, brush.handle)
   end
-  if show_wooden_plate then emit(wooden_plate, brush.wooden_plate) end
 end
+
+if show_shafts then
+  emit(driving_shaft, brush.shaft)
+  emit(driven_shaft, brush.shaft)
+end
+if show_wooden_plate then emit(wooden_plate, brush.wooden_plate) end
 
 -- ---- Console report ----
 print("==== Beveloid gear pair ====\n")
@@ -989,4 +1000,39 @@ if backlash then
 end
 for _, msg in ipairs(messages) do
   print(msg)
+end
+
+
+-- ---- Mode selection ----
+
+if mode==1 then
+  show_driving_gear = false
+  show_driven_gear  = false
+  show_shafts       = false
+  show_shim        = false
+  show_cap         = false
+  show_handle       = false
+  show_wooden_plate = false
+  shape_list = {
+    { 0, "driving gear"},
+    { 1, "driven gear"},
+    { 2, "driving gear shaft"},
+    { 3, "driven gear shaft"},
+    { 4, "shim"},
+    { 5, "driving gear cap"},
+    { 6, "driven gear cap"},
+    { 7, "handle"},
+    { 8, "wooden_plate"},
+  }
+  shape = ui_radio("\nSelect body to export", shape_list)
+
+  if shape==0 then emit(meshed_driving_gear) end
+  if shape==1 then emit(rotate(180,0,0) * meshed_driven_gear) end
+  if shape==2 then emit(driving_shaft) end
+  if shape==3 then emit(driven_shaft) end
+  if shape==4 then emit(shim) end
+  if shape==5 then emit(rotate(180,0,0) * driving_cap) end
+  if shape==6 then emit(rotate(180,0,0) * driven_cap) end
+  if shape==7 then emit(handle) end
+  if shape==8 then emit(wooden_plate) end
 end
