@@ -1,5 +1,6 @@
 # Conical Involute Gears (Beveloid Gears) for Backlash Reduction
-![Beveloid Gear Animation](./assets/Beveloid GIF2.gif)
+
+![Beveloid Gear Animation](./assets/beveloid.gif)
 
 A parametric Lua model for [IceSL Studio](https://icesl.loria.fr/) that generates a pair of straight conical involute gears and a demonstration assembly for exploring backlash reduction through axial adjustment.
 
