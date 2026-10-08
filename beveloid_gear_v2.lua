@@ -119,7 +119,10 @@ local wood_height                = 9.0
 -- ============================================================
 
 local advanced     = ui_bool("Advanced mode", false)
-local show_intersection = ui_bool("Check for intersection (backlash probe)", false)
+local show_intersection
+if mode ~= 1 then
+  show_intersection = ui_bool("Check for intersection (backlash probe)", false)
+end
 local res         = ui_number("Resolution (decrease for performance)", 10, 5, 50)       -- sampling for every curve
 
 
@@ -1013,6 +1016,7 @@ if mode==1 then
   show_cap         = false
   show_handle       = false
   show_wooden_plate = false
+  show_intersection = false
   shape_list = {
     { 0, "driving gear"},
     { 1, "driven gear"},
