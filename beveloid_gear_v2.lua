@@ -69,7 +69,7 @@ local brush = {
   driving_cap   = 2, -- white cap on the red gear
   driven_cap    = 3, -- red cap on the white gear
   handle        = 1,
-  wooden_plate  = 5,
+  base_plate    = 5,
   intersection  = 6,
 }
 
@@ -178,7 +178,7 @@ local show_shafts
 local show_shim
 local show_cap
 local show_handle
-local show_wooden_plate
+local show_base_plate
 
 if not advanced then
   show_driving_gear = true
@@ -187,7 +187,7 @@ if not advanced then
   show_shim         = true
   show_cap          = true
   show_handle       = true
-  show_wooden_plate = true
+  show_base_plate = true
 else  
   mode = ui_radio("\nMode selection", { { 0, "Toggle individual bodies" }, { 1, "STL Export" } })
   if mode==0 then
@@ -197,7 +197,7 @@ else
     show_shim         = ui_bool("Show Shim", true)
     show_cap          = ui_bool("Show Caps", true)
     show_handle       = ui_bool("Show Handle", true)
-    show_wooden_plate = ui_bool("Show Wooden Plate", true)
+    show_base_plate = ui_bool("Show Base Plate", true)
   end
   -- STL option is handled at the end, since it needs parts to be drawn first
 end
@@ -937,16 +937,34 @@ local driven_cap = translate(operating_center_dist, 0, driven_cap_z)
 -- WOODEN PLATE
 -- ============================================================
 
-local wooden_plate = translate(operating_center_dist / 2, 0, -mount_height - wood_height)
-    * cube(wood_length, wood_breadth, wood_height)
+-- ============================================================
+-- BASE PLATE
+-- ============================================================
 
--- Tip radius of driving gear / driven gear (largest profile shift)
-local ra1 = tip_radius(z_driving, math.max(x_coef_bottom_driving, x_coef_top_driving))
-local ra2 = tip_radius(z_driven, math.max(x_coef_bottom_driven, x_coef_top_driven))
-local half_extent = math.max(ra1, ra2, mount_length / 2)
-if operating_center_dist + 2 * half_extent > wood_length or 2 * half_extent > wood_breadth then
-  note("NOTE: the assembly is larger than the %.0f x %.0f mm wooden plate", wood_length, wood_breadth)
-end
+-- Tip radius of driving gear 
+local X1_max       = math.max(x_coef_bottom_driving, x_coef_top_driving)
+local ra1          = (z_driving * m / 2.0) + m * (1.0 + X1_max)
+
+-- Tip radius of driven gear
+local X2_max       = math.max(x_coef_bottom_driven, x_coef_top_driven)
+local ra2          = (z_driven * m / 2.0) + m * (1.0 + X2_max)
+
+local margin       = 5.0 -- padding around outermost geometry [mm]
+
+-- X extent: from the far side of driving gears to the far side of driven gear
+local plate_x_min  = -ra1 - margin
+local plate_x_max  = operating_center_dist + ra2 + margin
+local plate_w      = plate_x_max - plate_x_min
+
+-- Y extent: symmetric, decided by the larger of the two tip radii
+local plate_half_d = math.max(ra1, ra2) + margin
+local plate_d      = 2.0 * plate_half_d + operating_center_dist/3
+
+local p_thick      = 1.0  -- plate thickness [mm]
+
+-- Centre the plate in X so it spans [plate_x_min, plate_x_max]
+basePlate          = translate(plate_x_min + plate_w / 2.0, operating_center_dist/6, -mount_height - p_thick)
+    * cube(plate_w, plate_d, p_thick)
 
 -- ============================================================
 -- INTERSECTION BODY AND OUTPUT
@@ -985,7 +1003,7 @@ if show_shafts then
   emit(driving_shaft, brush.shaft)
   emit(driven_shaft, brush.shaft)
 end
-if show_wooden_plate then emit(wooden_plate, brush.wooden_plate) end
+if show_base_plate then emit(basePlate, brush.base_plate) end
 
 -- ---- Console report ----
 print("==== Beveloid gear pair ====\n")
@@ -1015,7 +1033,7 @@ if mode==1 then
   show_shim        = false
   show_cap         = false
   show_handle       = false
-  show_wooden_plate = false
+  show_base_plate = false
   show_intersection = false
   shape_list = {
     { 0, "driving gear"},
@@ -1026,7 +1044,7 @@ if mode==1 then
     { 5, "driving gear cap"},
     { 6, "driven gear cap"},
     { 7, "handle"},
-    { 8, "wooden_plate"},
+    { 8, "base_plate"},
   }
   shape = ui_radio("\nSelect body to export", shape_list)
 
@@ -1038,5 +1056,5 @@ if mode==1 then
   if shape==5 then emit(rotate(180,0,0) * driving_cap) end
   if shape==6 then emit(rotate(180,0,0) * driven_cap) end
   if shape==7 then emit(handle) end
-  if shape==8 then emit(wooden_plate) end
+  if shape==8 then emit(basePlate) end
 end
